@@ -1,26 +1,40 @@
 using Discord.WebSocket;
-using Wondie_CSharp.utils;
+using Serilog;
+using Wondie_CSharp.Utils;
 
 namespace Wondie_CSharp.Events.Actions;
 
+/// <summary>
+/// Handles the Discord client's "Ready" event, which is triggered when the bot has connected and is fully operational.
+/// </summary>
 public class ReadyEvent
 {
-    public static async Task OnClientReady(DiscordSocketClient client)
+    /// <summary>
+    /// Called when the Discord client is ready. Logs information about the client, connected guilds,
+    /// and updates metrics for tracking the guild count.
+    /// </summary>
+    /// <param name="client">The <see cref="DiscordSocketClient"/> representing the connected Discord client.</param>
+    /// <returns>A completed Task after the Ready processing is complete.</returns>
+    public static Task OnClientReady(DiscordSocketClient client)
     {
         if (client.CurrentUser != null)
         {
-            await Log.Info($"Logged in as {client.CurrentUser.Username}");
+            Log.Information($"Logged in as {client.CurrentUser.Username}");
         }
         else
         {
-            await Log.Warn("Client is ready, but CurrentUser is null.");
+            Log.Warning("Client is ready, but CurrentUser is null.");
         }
 
         foreach (var guild in client.Guilds)
         {
-            await Log.Info($"Connected to guild: {guild.Name}");
+            Log.Information($"Connected to guild: {guild.Name}");
         }
+        
+        MetricsService.UpdateGuildCount(client.Guilds.Count);
 
-        await Log.Info($"Connected to {client.Guilds.Count} guild(s).");
+        Log.Information($"Connected to {client.Guilds.Count} guild(s).");
+        
+        return Task.CompletedTask;
     }
 }

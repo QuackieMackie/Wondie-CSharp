@@ -1,7 +1,8 @@
 ﻿using Discord;
 using Discord.WebSocket;
+using Serilog;
 using Wondie_CSharp.Commands;
-using Wondie_CSharp.utils;
+using Wondie_CSharp.Utils;
 using EventHandler = Wondie_CSharp.Events.EventHandler;
 using Exception = System.Exception;
 
@@ -9,55 +10,78 @@ namespace Wondie_CSharp;
 
 public class Program
 {
-    private static DiscordSocketClient _client;
-    private static EventHandler _eventHandler;
+    private static DiscordSocketClient _client = null!;
+    private static EventHandler _eventHandler = null!;
     
-    private static readonly CancellationTokenSource _cancelTokenSource = new();
+    private static readonly CancellationTokenSource CancelTokenSource = new();
     private static bool _isShuttingDown;
 
     public static Task Main(string[] _) => MainAsync();
 
     private static async Task MainAsync()
     {
-        SetupGracefulShutdown();
-
-        _client = new DiscordSocketClient(new DiscordSocketConfig
-        {
-            GatewayIntents = GatewayIntents.AllUnprivileged |
-                             GatewayIntents.MessageContent |
-                             GatewayIntents.Guilds |
-                             GatewayIntents.GuildMembers |
-                             GatewayIntents.DirectMessages
-        });
-
-        DotNetEnv.Env.Load(Path.Combine(AppContext.BaseDirectory, ".env"));
-        var token = Environment.GetEnvironmentVariable("BOT_TOKEN") 
-                    ?? throw new Exception("BOT_TOKEN is not found in environment variables.");
-
-        _eventHandler = new EventHandler(_client);
-        _eventHandler.RegisterEvents();
-
-        await _client.LoginAsync(TokenType.Bot, token);
-        await _client.StartAsync();
-
-        await CommandHandler.RegisterCommands(_client);
+        Log.Logger = new LoggerConfiguration()
+            .MinimumLevel.Debug()
+            .WriteTo.Console()
+            .WriteTo.File("logs/wondie.log", rollingInterval: RollingInterval.Day)
+            .CreateLogger();
 
         try
         {
-            await Task.Delay(-1, _cancelTokenSource.Token);
+            Log.Information("Starting up...");
+
+            Log.Debug("Serilog is set up.");
+
+            SetupGracefulShutdown();
+        
+            Log.Debug("Before Discord client initialization.");
+
+            _client = new DiscordSocketClient(new DiscordSocketConfig
+            {
+                GatewayIntents = GatewayIntents.AllUnprivileged |
+                                 GatewayIntents.MessageContent |
+                                 GatewayIntents.Guilds |
+                                 GatewayIntents.GuildMembers |
+                                 GatewayIntents.DirectMessages
+            });
+
+            MetricsService.StartMetricsServer();
+
+            var token = File.ReadAllText("/run/secrets/bot_token");
+            Log.Debug($"BOT_TOKEN: {token.Substring(0, 5)}...");
+
+            _eventHandler = new EventHandler(_client);
+            _eventHandler.RegisterEvents();
+
+            await _client.LoginAsync(TokenType.Bot, token);
+            await _client.StartAsync();
+
+            await CommandHandler.RegisterCommands(_client);
+
+            await Task.Delay(-1, CancelTokenSource.Token);
         }
         catch (TaskCanceledException)
         {
-            // Normal shutdown
+            Log.Information("Shutdown triggered.");
+        }
+        catch (Exception ex)
+        {
+            Log.Fatal(ex, "Unhandled exception during bot runtime");
+        }
+        finally
+        {
+            MetricsService.StopMetricsServer();
+            Log.CloseAndFlush();
         }
     }
+
 
     private static async Task ShutdownAsync()
     {
         if (_isShuttingDown) return;
         _isShuttingDown = true;
 
-        await Log.Warn("Shutting down...");
+        Log.Warning("Shutting down...");
 
         try
         {
@@ -65,14 +89,15 @@ public class Program
             await CommandHandler.UnregisterCommands();
             await _client.LogoutAsync();
             await _client.StopAsync();
+            MetricsService.StopMetricsServer();
         }
         catch (Exception ex)
         {
-            await Log.Error($"Shutdown encountered an error: {ex.Message}");
+            Log.Error($"Shutdown encountered an error: {ex.Message}");
         }
         finally
         {
-            _cancelTokenSource.Cancel();
+            await CancelTokenSource.CancelAsync();
         }
     }
 

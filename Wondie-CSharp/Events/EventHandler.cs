@@ -1,49 +1,51 @@
-﻿using Discord;
-using Discord.WebSocket;
+﻿using Discord.WebSocket;
+using Serilog;
 using Wondie_CSharp.Events.Actions;
-using Wondie_CSharp.utils;
 
 namespace Wondie_CSharp.Events;
 
-public class EventHandler
+/// <summary>
+/// Handles the registration and unregistration of Discord client events.
+/// This class centralizes event handling logic to improve maintainability and modularity.
+/// </summary>
+public class EventHandler(DiscordSocketClient client)
 {
-    private readonly DiscordSocketClient _client;
-
-    public EventHandler(DiscordSocketClient client)
-    {
-        _client = client;
-    }
-
+    /// <summary>
+    /// Registers the necessary events for the Discord client, such as handling logs, client readiness, and message receipt.
+    /// </summary>
     public void RegisterEvents()
     {
-        _client.Ready += OnReadyEventHandler;
-        _client.Log += OnLogEventHandler;
-        _client.MessageReceived += MessageEvent.MessageChecker;
+        client.Ready += OnReadyEventHandler;
+        client.MessageReceived += OnMessageEventHandler;
     }
 
+    /// <summary>
+    /// Unregisters all previously registered events to allow for a graceful shutdown or cleanup.
+    /// </summary>
     public void UnregisterEvents()
     {
-        _client.Ready -= OnReadyEventHandler;
-        _client.Log -= OnLogEventHandler;
-        _client.MessageReceived -= MessageEvent.MessageChecker;
+        client.Ready -= OnReadyEventHandler;
+        client.MessageReceived -= OnMessageEventHandler;
     }
 
+    /// <summary>
+    /// Handles messages received in Discord channels. 
+    /// Currently logs the content of the message.
+    /// </summary>
+    /// <param name="message">The message object received from Discord.</param>
+    private Task OnMessageEventHandler(SocketMessage message)
+    {
+        Log.Information(message.Content);
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Fired when the Discord client is marked as "ready."
+    /// This event sets up additional services like monitoring and logs client readiness.
+    /// </summary>
     private async Task OnReadyEventHandler()
     {
-        await ReadyEvent.OnClientReady(_client);
-        await StatusEvent.StartMonitoring(_client);
-    }
-
-    private Task OnLogEventHandler(LogMessage log)
-    {
-        return log.Severity switch
-        {
-            LogSeverity.Critical => Log.Error(log.Message),
-            LogSeverity.Error => Log.Error(log.Message),
-            LogSeverity.Warning => Log.Warn(log.Message),
-            LogSeverity.Info => Log.Info(log.Message),
-            LogSeverity.Debug => Log.Debug(log.Message),
-            _ => Log.Info(log.Message)
-        };
+        await ReadyEvent.OnClientReady(client);
+        await StatusEvent.StartMonitoring(client);
     }
 }
