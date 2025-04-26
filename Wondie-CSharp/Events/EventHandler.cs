@@ -6,7 +6,7 @@ namespace Wondie_CSharp.Events;
 
 /// <summary>
 /// Handles the registration and unregistration of Discord client events.
-/// This class centralizes event handling logic to improve maintainability and modularity.
+/// This class centralises event handling logic to improve maintainability and modularity.
 /// </summary>
 public class EventHandler(DiscordSocketClient client)
 {
@@ -17,20 +17,26 @@ public class EventHandler(DiscordSocketClient client)
     {
         client.Ready += OnReadyEventHandler;
         client.MessageReceived += OnMessageEventHandler;
+        client.ReactionAdded += RuleComplianceEvent.HandleReactionAdded;
+        client.ReactionRemoved += RuleComplianceEvent.HandleReactionRemoved;
+
     }
 
     /// <summary>
-    /// Unregisters all previously registered events to allow for a graceful shutdown or cleanup.
+    /// Unregisters all previously registered events to allow for a graceful shutdown or clean-up.
     /// </summary>
     public void UnregisterEvents()
     {
         client.Ready -= OnReadyEventHandler;
         client.MessageReceived -= OnMessageEventHandler;
+        client.ReactionAdded -= RuleComplianceEvent.HandleReactionAdded;
+        client.ReactionRemoved -= RuleComplianceEvent.HandleReactionRemoved;
+
     }
 
     /// <summary>
     /// Handles messages received in Discord channels. 
-    /// Currently logs the content of the message.
+    /// Currently, logs the content of the message.
     /// </summary>
     /// <param name="message">The message object received from Discord.</param>
     private Task OnMessageEventHandler(SocketMessage message)
