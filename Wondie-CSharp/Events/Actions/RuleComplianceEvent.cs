@@ -31,7 +31,7 @@ namespace Wondie_CSharp.Events.Actions
             
             if (reaction.Emote.Name != expectedEmote) return;
 
-            if (reaction.User.IsSpecified && reaction.User.Value is SocketGuildUser user)
+            if (reaction.User is { IsSpecified: true, Value: SocketGuildUser user })
             {
                 var guild = user.Guild;
                 var role = guild.Roles.FirstOrDefault(r => r.Name.Equals(roleName, StringComparison.OrdinalIgnoreCase));
@@ -64,7 +64,7 @@ namespace Wondie_CSharp.Events.Actions
             
             if (reaction.Emote.Name != expectedEmote) return;
 
-            if (reaction.User.IsSpecified && reaction.User.Value is SocketGuildUser user)
+            if (reaction.User is { IsSpecified: true, Value: SocketGuildUser user })
             {
                 var guild = user.Guild;
                 var role = guild.Roles.FirstOrDefault(r => r.Name.Equals(roleName, StringComparison.OrdinalIgnoreCase));

@@ -1,4 +1,5 @@
 ﻿using Discord.WebSocket;
+using Microsoft.Extensions.Logging;
 using Serilog;
 using Wondie_CSharp.Events.Actions;
 
@@ -8,50 +9,48 @@ namespace Wondie_CSharp.Events;
 /// Handles the registration and unregistration of Discord client events.
 /// This class centralises event handling logic to improve maintainability and modularity.
 /// </summary>
-public class EventHandler(DiscordSocketClient client)
+public class EventHandler
 {
+    private readonly DiscordSocketClient _client;
+
     /// <summary>
-    /// Registers the necessary events for the Discord client, such as handling logs, client readiness, and message receipt.
+    /// Initializes the EventHandler with the provided DiscordSocketClient.
+    /// </summary>
+    public EventHandler(DiscordSocketClient client)
+    {
+        _client = client;
+    }
+
+    /// <summary>
+    /// Registers the necessary events for the Discord client.
     /// </summary>
     public void RegisterEvents()
     {
-        client.Ready += OnReadyEventHandler;
-        client.MessageReceived += OnMessageEventHandler;
-        client.ReactionAdded += RuleComplianceEvent.HandleReactionAdded;
-        client.ReactionRemoved += RuleComplianceEvent.HandleReactionRemoved;
+        _client.Ready += OnReadyEventHandler;
+        _client.ReactionAdded += RuleComplianceEvent.HandleReactionAdded;
+        _client.ReactionRemoved += RuleComplianceEvent.HandleReactionRemoved;
 
+        Log.Information("Events registered successfully.");
     }
 
     /// <summary>
-    /// Unregisters all previously registered events to allow for a graceful shutdown or clean-up.
+    /// Unregisters all previously registered events.
     /// </summary>
     public void UnregisterEvents()
     {
-        client.Ready -= OnReadyEventHandler;
-        client.MessageReceived -= OnMessageEventHandler;
-        client.ReactionAdded -= RuleComplianceEvent.HandleReactionAdded;
-        client.ReactionRemoved -= RuleComplianceEvent.HandleReactionRemoved;
+        _client.Ready -= OnReadyEventHandler;
+        _client.ReactionAdded -= RuleComplianceEvent.HandleReactionAdded;
+        _client.ReactionRemoved -= RuleComplianceEvent.HandleReactionRemoved;
 
+        Log.Information("Events unregistered successfully.");
     }
 
     /// <summary>
-    /// Handles messages received in Discord channels. 
-    /// Currently, logs the content of the message.
-    /// </summary>
-    /// <param name="message">The message object received from Discord.</param>
-    private Task OnMessageEventHandler(SocketMessage message)
-    {
-        Log.Information(message.Content);
-        return Task.CompletedTask;
-    }
-
-    /// <summary>
-    /// Fired when the Discord client is marked as "ready."
-    /// This event sets up additional services like monitoring and logs client readiness.
+    /// Fires when the Discord client is "ready."
     /// </summary>
     private async Task OnReadyEventHandler()
     {
-        await ReadyEvent.OnClientReady(client);
-        await StatusEvent.StartMonitoring(client);
+        await ReadyEvent.OnClientReady(_client);
+        await StatusEvent.StartMonitoring(_client, new LoggerFactory().CreateLogger("StatusEvent"));
     }
 }

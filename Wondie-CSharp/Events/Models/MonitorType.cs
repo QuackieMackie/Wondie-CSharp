@@ -24,9 +24,5 @@ public enum MonitorType
     /// <summary>
     /// Check if a specific process is running on the local machine.
     /// </summary>
-    Process,
-    /// <summary>
-    /// Check if a Minecraft server is reachable and accepting connections.
-    /// </summary>
-    Minecraft
+    Process
 }

@@ -11,7 +11,7 @@ namespace Wondie_CSharp.Commands.Actions;
 public class CollatzCommand : ISlashCommand
 {
     public string Name => "collatz";
-    public string Description => "Run a number through the Collatz conjecture";
+    public string Description => "Run a number through the Collatz conjecture.";
     
     public SlashCommandProperties BuildCommand()
     {

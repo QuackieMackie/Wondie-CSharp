@@ -1,64 +1,67 @@
-using Discord;
-using Discord.WebSocket;
-using Wondie_CSharp.Commands.Models;
 using System.Reflection;
-using Serilog;
+using Discord.WebSocket;
+using Microsoft.Extensions.Logging;
+using Wondie_CSharp.Commands.Models;
 
 namespace Wondie_CSharp.Commands;
 
-/// <summary>
-/// The CommandHandler class is responsible for managing and handling slash commands for the Discord bot.
-/// It discovers, registers, executes, and unregisters commands as needed.
-/// </summary>
 public class CommandHandler
 {
-    private static DiscordSocketClient _client = null!;
-    private static readonly Dictionary<string, ISlashCommand> Commands = new();
+    private readonly DiscordSocketClient _client;
+    private readonly ILogger _logger;
+    private readonly Dictionary<string, ISlashCommand> _commands = new();
 
-    /// <summary>
-    /// A set of allowed channel IDs where slash commands can be executed.
-    /// </summary>
-    private static readonly HashSet<ulong> AllowedChannelIds = new()
-    {
-        1365747310641811487, // #General/bot-commands
-        1365751028120555622  // #Dev/bot-commands
-    };
-    
-    /// <summary>
-    /// Registers all the slash commands for the bot and initialises the CommandHandler with the given Discord client.
-    /// </summary>
-    /// <param name="client">The <see cref="DiscordSocketClient"/> to register commands for.</param>
-    public static async Task RegisterCommands(DiscordSocketClient client)
+    public CommandHandler(DiscordSocketClient client, ILogger logger)
     {
         _client = client;
+        _logger = logger;
+    }
 
-        if (_client.ConnectionState != ConnectionState.Connected)
-        {
-            var readyTask = new TaskCompletionSource<bool>();
-            _client.Ready += () =>
-            {
-                readyTask.SetResult(true);
-                return Task.CompletedTask;
-            };
-            await readyTask.Task;
-        }
-
+    /// <summary>
+    /// Dynamically discovers and registers all commands implementing <see cref="ISlashCommand"/>.
+    /// </summary>
+    public async Task RegisterCommandsAsync()
+    {
         DiscoverCommands();
 
         try
         {
-            foreach (var command in Commands.Values)
+            foreach (var command in _commands.Values)
             {
                 await _client.CreateGlobalApplicationCommandAsync(command.BuildCommand());
+                _logger.LogInformation($"Registered command: {command.Name}");
             }
 
-            _client.SlashCommandExecuted += HandleSlashCommand;
-
-            Log.Information($"Successfully registered {Commands.Count} commands.");
+            _logger.LogInformation("All slash commands registered globally!");
         }
         catch (Exception ex)
         {
-            Log.Error($"Error registering commands: {ex.Message}");
+            _logger.LogError(ex, "Error registering slash commands.");
+        }
+    }
+
+    /// <summary>
+    /// Handles dynamic execution of slash commands.
+    /// </summary>
+    /// <param name="command">The command invoked by the user.</param>
+    public async Task HandleSlashCommandAsync(SocketSlashCommand command)
+    {
+        if (_commands.TryGetValue(command.CommandName, out var slashCommand))
+        {
+            try
+            {
+                await slashCommand.ExecuteAsync(command);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Error executing command: {command.CommandName}");
+                await command.RespondAsync("An error occurred while executing this command.", ephemeral: true);
+            }
+        }
+        else
+        {
+            _logger.LogWarning($"Unknown command: {command.CommandName}");
+            await command.RespondAsync("Unknown command.", ephemeral: true);
         }
     }
 
@@ -66,7 +69,7 @@ public class CommandHandler
     /// Discovers all classes that implement the <see cref="ISlashCommand"/> interface
     /// and adds them to the Commands dictionary.
     /// </summary>
-    private static void DiscoverCommands()
+    private void DiscoverCommands()
     {
         var commandTypes = Assembly.GetExecutingAssembly().GetTypes()
             .Where(type => typeof(ISlashCommand).IsAssignableFrom(type) && type is { IsInterface: false, IsAbstract: false });
@@ -74,64 +77,8 @@ public class CommandHandler
         foreach (var type in commandTypes)
         {
             if (Activator.CreateInstance(type) is not ISlashCommand command) continue;
-            Commands[command.Name] = command;
-            Log.Debug($"Discovered command: {command.Name}");
-        }
-    }
-
-    /// <summary>
-    /// Handles the execution of slash commands when triggered by users.
-    /// Verifies the command is valid and executes it in the allowed channels.
-    /// </summary>
-    /// <param name="command">The <see cref="SocketSlashCommand"/> instance representing the command invocation.</param>
-    private static async Task HandleSlashCommand(SocketSlashCommand command)
-    {
-        try
-        {
-            if (!AllowedChannelIds.Contains(command.Channel.Id))
-            {
-                await command.RespondAsync("This command cannot be used in this channel.", ephemeral: true);
-                return;
-            }
-
-            if (Commands.TryGetValue(command.CommandName, out var slashCommand))
-            {
-                await slashCommand.ExecuteAsync(command);
-            }
-            else
-            {
-                await command.RespondAsync("Unknown command", ephemeral: true);
-            }
-        }
-        catch (Exception ex)
-        {
-            await command.RespondAsync($"Error executing command: {ex.Message}", ephemeral: true);
-        }
-    }
-
-    /// <summary>
-    /// Unregisters all previously registered commands from the Discord client.
-    /// This method also detaches the event handler for slash command execution.
-    /// </summary>
-    public static async Task UnregisterCommands()
-    {
-        try
-        {
-            var commands = await _client.GetGlobalApplicationCommandsAsync();
-
-            foreach (var command in commands)
-            {
-                await command.DeleteAsync();
-            }
-
-            _client.SlashCommandExecuted -= HandleSlashCommand;
-            Commands.Clear();
-
-            Log.Information($"Unregistered {commands.Count} commands.");
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"Error unregistering commands: {ex.Message}");
+            _commands[command.Name] = command;
+            _logger.LogDebug($"Discovered command: {command.Name}");
         }
     }
 }

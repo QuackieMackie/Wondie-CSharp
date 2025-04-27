@@ -4,83 +4,135 @@ using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using Discord;
 using Discord.WebSocket;
-using Serilog;
+using Microsoft.Extensions.Logging;
 using Wondie_CSharp.Events.Models;
 
 namespace Wondie_CSharp.Events.Actions;
 
-/// <summary>
-/// Provides functionality to monitor the status of various services and update a status dashboard on Discord.
-/// </summary>
 public static class StatusEvent
 {
-    /// <summary>
-    /// Dictionary containing the targets to monitor, with their names as keys and <see cref="MonitorTarget"/> objects as values.
-    /// </summary>
     private static readonly Dictionary<string, MonitorTarget> Targets = new()
     {
-        { "Sylphian Proxy", new MonitorTarget("sylphian-proxy:25565", MonitorType.Minecraft) },
-        { "Sylphian Hub", new MonitorTarget("sylphian-hub:25565", MonitorType.Minecraft) },
-        { "Sylphian Survival", new MonitorTarget("sylphian-survival:25565", MonitorType.Minecraft) },
+        { "Sylphian Proxy", new MonitorTarget("mc.sylphian.net", "sylphian-proxy:25565", MonitorType.Tcp) },
+        { "Sylphian Hub", new MonitorTarget("mc.sylphian.net", "sylphian-hub:25565", MonitorType.Tcp) },
+        { "Sylphian Survival", new MonitorTarget("mc.sylphian.net", "sylphian-survival:25565", MonitorType.Tcp) },
     };
 
-    private static IUserMessage? _statusMessage;
-    private const ulong StatusChannelId = 1363956343924457663;
+    private static readonly Dictionary<ulong, IUserMessage> StatusMessages = new();
     private static readonly TimeSpan UpdateInterval = TimeSpan.FromMinutes(1);
+    private static CancellationTokenSource _monitoringTokenSource = new();
 
     /// <summary>
-    /// Starts monitoring the status of targets and periodically updates the Discord status channel.
+    /// Starts monitoring the targets and posting the embed to all "server-status" channels.
     /// </summary>
-    /// <param name="client">The DiscordSocketClient instance to interact with Discord.</param>
-    public static async Task StartMonitoring(DiscordSocketClient client)
+    public static async Task StartMonitoring(DiscordSocketClient client, ILogger logger)
     {
-        if (client.GetChannel(StatusChannelId) is not ITextChannel channel)
-        {
-            Log.Error("Status channel not found!");
-            return;
-        }
+        logger.LogInformation("Starting the StatusEvent monitoring loop...");
 
-        var messages = await channel.GetMessagesAsync(1).FlattenAsync();
-        _statusMessage = messages.FirstOrDefault() as IUserMessage ?? await channel.SendMessageAsync(embed: CreateStatusEmbed());
+        _monitoringTokenSource = new CancellationTokenSource();
 
+        // Start the monitoring loop
         _ = Task.Run(async () =>
         {
-            while (true)
+            while (!_monitoringTokenSource.Token.IsCancellationRequested)
             {
-                await UpdateStatus();
-                await Task.Delay(UpdateInterval);
+                await EnsureStatusChannels(client, logger);
+                await UpdateStatus(logger);
+                logger.LogInformation("Status check and update cycle completed.");
+                await Task.Delay(UpdateInterval, _monitoringTokenSource.Token);
             }
-        });
+        }, _monitoringTokenSource.Token);
     }
 
     /// <summary>
-    /// Updates the Discord status message with the latest information.
+    /// Stops monitoring and cancels the monitoring loop.
     /// </summary>
-    private static async Task UpdateStatus()
+    public static void StopMonitoring(ILogger logger)
     {
-        if (_statusMessage == null) return;
-
-        await UpdateTargetStatuses();
-        await _statusMessage.ModifyAsync(msg => msg.Embed = CreateStatusEmbed());
+        logger.LogInformation("Stopping the StatusEvent monitoring loop...");
+        _monitoringTokenSource.Cancel();
     }
 
     /// <summary>
-    /// Updates the "IsOnline" state of all defined monitor targets by performing relevant checks.
+    /// Ensures that all guilds with a "server-status" channel have a corresponding status message.
     /// </summary>
-    private static async Task UpdateTargetStatuses()
+    private static async Task EnsureStatusChannels(DiscordSocketClient client, ILogger logger)
+    {
+        foreach (var guild in client.Guilds)
+        {
+            try
+            {
+                var channel = guild.TextChannels.FirstOrDefault(c => c.Name == "server-status");
+                if (channel is ITextChannel textChannel)
+                {
+                    // Get or send the initial status message
+                    if (!StatusMessages.ContainsKey(guild.Id))
+                    {
+                        var messages = await textChannel.GetMessagesAsync(1).FlattenAsync();
+                        var statusMessage = messages.FirstOrDefault() as IUserMessage ?? await textChannel.SendMessageAsync(embed: CreateStatusEmbed());
+
+                        StatusMessages[guild.Id] = statusMessage;
+                        logger.LogInformation($"Initialized status message for guild '{guild.Name}' in channel '{textChannel.Name}'.");
+                    }
+                }
+                else
+                {
+                    // Remove guild from tracked status messages if the channel no longer exists
+                    if (StatusMessages.Remove(guild.Id))
+                    {
+                        logger.LogWarning($"Removed tracked status for guild '{guild.Name}' because no 'server-status' channel was found.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, $"Error ensuring status channel for guild '{guild.Name}'.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Updates the status messages across all guilds with a "server-status" channel.
+    /// </summary>
+    private static async Task UpdateStatus(ILogger logger)
+    {
+        foreach (var (guildId, message) in StatusMessages)
+        {
+            try
+            {
+                await UpdateTargetStatuses(logger);
+                await message.ModifyAsync(msg => msg.Embed = CreateStatusEmbed());
+                logger.LogInformation($"Updated status message for guild ID: {guildId}.");
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, $"Failed to update status message for guild ID: {guildId}.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Checks all monitor targets and updates their online status.
+    /// </summary>
+    private static async Task UpdateTargetStatuses(ILogger logger)
     {
         foreach (var target in Targets.Values)
         {
-            var isOnline = await CheckTarget(target);
-            target.IsOnline = isOnline;
+            try
+            {
+                target.IsOnline = await CheckTarget(target);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error checking target {TargetPublicAddress}", target.PublicAddress);
+                target.IsOnline = false;
+            }
         }
     }
 
     /// <summary>
-    /// Checks whether a given monitor target is online, based on its type.
+    /// Performs the target-specific status check.
     /// </summary>
-    /// <param name="target">The <see cref="MonitorTarget"/> to check.</param>
-    /// <returns>A boolean indicating whether the target is online.</returns>
     private static async Task<bool> CheckTarget(MonitorTarget target)
     {
         try
@@ -102,16 +154,6 @@ public static class StatusEvent
                     }
 
                 case MonitorType.Tcp:
-                    using (var client = new TcpClient())
-                    {
-                        var parts = target.Address.Split(':');
-                        if (parts.Length != 2) return false;
-
-                        await client.ConnectAsync(parts[0], int.Parse(parts[1]));
-                        return client.Connected;
-                    }
-
-                case MonitorType.Minecraft:
                     using (var client = new TcpClient())
                     {
                         var parts = target.Address.Split(':');
@@ -149,18 +191,60 @@ public static class StatusEvent
     {
         var now = DateTimeOffset.UtcNow;
         var embed = new EmbedBuilder()
-            .WithTitle("QuackieMackie's Status Dashboard")
-            .WithDescription($"Provides real-time status of services.\n\n**Last checked:** <t:{now.AddSeconds(-30).ToUnixTimeSeconds()}:R>\n**Next checked:** <t:{now.AddSeconds(30).ToUnixTimeSeconds()}:R>")
+            .WithTitle("Status Dashboard")
+            .WithDescription($"Provides real-time status of services.\n\n" +
+                             $"**Last checked:** <t:{now.AddSeconds(-30).ToUnixTimeSeconds()}:R>\n" +
+                             $"**Next check:** <t:{now.AddSeconds(30).ToUnixTimeSeconds()}:R>")
             .WithColor(Color.Blue);
 
-        embed.AddField("Am I Online?", $"✅ **Yes, I am!** (as of <t:{now.AddSeconds(-30).ToUnixTimeSeconds()}:R>)");
+        embed.AddField("🟢 **Am I Online?**", $"Yes, I'm **online**! (as of <t:{now.AddSeconds(-30).ToUnixTimeSeconds()}:R>)");
 
         foreach (var (name, target) in Targets)
         {
-            var status = target.IsOnline ? "✅ Online" : "❌ Offline";
-            embed.AddField(name, status);
+            var status = target.IsOnline ? "🟢 **Online**" : "🔴 **Offline**";
+            var publicAddress = target.PublicAddress;
+
+            embed.AddField(
+                $"**{name}**",
+                $"{status}\n" +
+                $"To connect: `{publicAddress}`\n"
+            );
         }
 
         return embed.Build();
+    }
+
+    /// <summary>
+    /// Updates all "server-status" channels to indicate that the bot is offline.
+    /// </summary>
+    public static async Task SetBotStatusToOffline(DiscordSocketClient client)
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        var offlineEmbed = new EmbedBuilder()
+            .WithTitle("Status Dashboard")
+            .WithDescription($"Provides real-time status of services.")
+            .WithColor(Color.Red)
+            .AddField("🔴 **Am I Online?**", $"No! I'm **offline**! (as of <t:{now.AddSeconds(-30).ToUnixTimeSeconds()}:R>)")
+            .Build();
+
+        foreach (var guild in client.Guilds)
+        {
+            var channel = guild.TextChannels.FirstOrDefault(c => c.Name == "server-status");
+            if (channel is ITextChannel textChannel)
+            {
+                try
+                {
+                    var messages = await textChannel.GetMessagesAsync(1).FlattenAsync();
+                    var statusMessage = messages.FirstOrDefault() as IUserMessage ?? await textChannel.SendMessageAsync(embed: offlineEmbed);
+
+                    await statusMessage.ModifyAsync(msg => msg.Embed = offlineEmbed);
+                }
+                catch
+                {
+                    // Ignore exceptions in shutdown
+                }
+            }
+        }
     }
 }
